@@ -4,14 +4,14 @@ suppressPackageStartupMessages(invisible(lapply(packages, library, character.onl
 # -------------------------------------------------------
 ## INPUTS
 # type organism here: mouse or human; default is mouse
-organism = 'human'
+organism = 'mouse'
 
 # type selection of genes: 'all' or 'select'; default is all
 selection = 'all'
 
 # If selecting for a list of genes, paste the file path here; allowable types are .txt, .xlxs, or .csv: 
 # Make sure there are no column headers on your gene list
-my_genes = 'Orf8_DEG_lists/Orf8overGFP_up'
+my_genes = 'genelists/CtrlvCtrl-BDNF_bmOver3.txt'
 
 # Select which genomic region you would like: 'genic', 'promoter', or 'both'; default is genic
 region = 'both'
@@ -106,6 +106,7 @@ entrezToEnsemblPlusGeneSymbol <- function(organism, gr_df) {
   query
 }
 
+# This function wraps trimFivePrimeSide just to clean up createBEDs
 trimGenesWrapper <- function(txdb, genomic_loc, bed_df, promoter_width) {
   if (genomic_loc == 'promoter' || genomic_loc == 'both') {
     forBed_gr = makeGRangesFromDataFrame(bed_df, keep.extra.columns = T)
@@ -120,9 +121,22 @@ trimGenesWrapper <- function(txdb, genomic_loc, bed_df, promoter_width) {
   }
 }
 
-txdb = loadTxDbFromOrganism(organism = organism)
+makeOutputFolders <- function(genomic_loc) {
+  folders = dir()
+  if (genomic_loc == 'both') {
+    if (!('BEDoutputs_promoter' %in% folders)) {
+      dir.create('BEDoutputs_promoter')
+    }
+    if (!('BEDoutputs_genic' %in% folders)) {
+      dir.create('BEDoutputs_genic')
+    }
+  } else {
+    if (!(glue('BEDoutputs_{genomic_loc}' %in% folders))) {
+      dir.create(glue('BEDoutputs_{genomic_loc}'))
+    }
+  }
 
-mart = generateMartObject(organism)
+}
 
 createBEDs <- function(txdb, 
                        genes = c('all', 'select'), 
@@ -130,6 +144,7 @@ createBEDs <- function(txdb,
                        organism = 'mouse',
                        upstream = 2000,
                        genelistPath) {
+  makeOutputFolders(genomic_loc = genomic_loc)
   curr_genome = txdb$user_genome[1]
   gr = suppressMessages(genes(txdb))
   tmp = as_tibble(gr)
@@ -144,19 +159,21 @@ createBEDs <- function(txdb,
   
   gnflankTrimmed = trimGenesWrapper(txdb, genomic_loc = genomic_loc, 
                                     bed_df = forBed, promoter_width = upstream)
- 
+  
   if (genes == 'all' && (genomic_loc == 'genic' || genomic_loc == 'both')) {
     forBed %>%
       dplyr::select(-gene_symbol) %>%
+      unique(.) %>%
       dplyr::rename(name = ensembl_gene_id, chrom = seqnames) %>%
-      write_tsv(file = glue('outputs/{curr_genome}_allGenic.bed'))
+      write_tsv(file = glue('BEDoutputs_genic/{curr_genome}_allGenic.bed'))
   }
   
   if (genes == 'all' && (genomic_loc == 'promoter' || genomic_loc == 'both')) {
     gnflankTrimmed %>%
       dplyr::select(-width, -gene_symbol) %>%
+      unique(.) %>%
       dplyr::rename(name = ensembl_gene_id, chrom = seqnames) %>%
-      write_tsv(file=glue('outputs/{curr_genome}_allPromoter{upstream}.bed'))
+      write_tsv(file=glue('BEDoutputs_promoter/{curr_genome}_allPromoter{upstream}.bed'))
   }
   
   if (genes == 'select') {
@@ -172,15 +189,17 @@ createBEDs <- function(txdb,
         select_genic = forBed %>%
           filter(ensembl_gene_id %in% select_genes) %>%
           dplyr::select(seqnames, start, end, strand, gene_symbol) %>%
+          unique(.) %>%
           dplyr::rename(name = gene_symbol, chrom = seqnames)
       } else {
         select_genic = forBed %>%
           filter(gene_symbol %in% select_genes) %>%
           dplyr::select(seqnames, start, end, strand, gene_symbol) %>%
+          unique(.) %>%
           dplyr::rename(name = gene_symbol, chrom = seqnames)
       }
       select_genic %>%
-        write_tsv(file = glue('outputs/{curr_genome}_{basename(genelistPath)}_Genic.bed'))
+        write_tsv(file = glue('BEDoutputs_genic/{curr_genome}_{basename(genelistPath)}_Genic.bed'))
     }
     if (genomic_loc == 'promoter' || genomic_loc == 'both') {
       if (selection_type) { 
@@ -188,18 +207,26 @@ createBEDs <- function(txdb,
         select_promoter = gnflankTrimmed %>%
           filter(ensembl_gene_id %in% select_genes) %>%
           dplyr::select(seqnames, start, end, strand, gene_symbol) %>%
+          unique(.) %>%
           dplyr::rename(name = gene_symbol, chrom = seqnames)
       } else {
         select_promoter = gnflankTrimmed %>%
           filter(gene_symbol %in% select_genes) %>%
           dplyr::select(seqnames, start, end, strand, gene_symbol) %>%
+          unique(.) %>%
           dplyr::rename(name = gene_symbol, chrom = seqnames)
       }
       select_promoter %>%
-        write_tsv(file = glue('outputs/{curr_genome}_{basename(genelistPath)}_Promoter{upstream}.bed'))
+        write_tsv(file = glue('BEDoutputs_promoter/{curr_genome}_{basename(genelistPath)}_Promoter{upstream}.bed'))
     }
   }
 }
+
+# ---------------------------------------------------------
+
+txdb <- loadTxDbFromOrganism(organism = organism)
+
+mart <- generateMartObject(organism)
 
 createBEDs(txdb = txdb, genes = selection, genomic_loc = region, 
            organism = organism, upstream = upstream, genelistPath = my_genes)
